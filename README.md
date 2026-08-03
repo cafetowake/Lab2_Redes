@@ -3,7 +3,6 @@
 ### Laboratorio2 
 
 # Esquemas de Detección y Corrección de Errores
-
 - Corrección: Código de Hamming (SEC — Single Error Correction)
 - Detección: CRC-32 (división polinomial bit a bit, generador 0x04C11DB7)
 - Emisor: Python 
@@ -13,66 +12,94 @@
 - Paula De León
 - Angie Vela
 
+# Aclaración
+No queda claro si debiamos resolver la guía resumida o la extendida. Decidimos
+hacer ambas cosas. En la carpeta "scripts resuelven guia resumida" está la primera
+versión de los scripts que resuelven este laboratorio. Los scripts en la raiz
+del proyecto tienen una arquitectura más compleja, como solicita la guia extendida.
+
+## Arquitectura de capas implementada
+
+| Capa | Servicios | Dónde |
+|---|---|---|
+| Aplicación | `solicitar_mensaje`, `mostrar_mensaje` | ambos |
+| Presentación | `codificar_mensaje` (texto → ASCII binario) / `decodificar_mensaje` (binario → texto) | emisor / receptor |
+| Enlace | `calcular_integridad` / `verificar_integridad` + `corregir_mensaje` | emisor / receptor |
+| Ruido | `aplicar_ruido` (flip de bits por probabilidad, ej. 1/100) | emisor |
+| Transmisión | `enviar_informacion` / `recibir_informacion` (sockets TCP) | emisor / receptor |
+
+El receptor es el servidor: se queda escuchando en un puerto hasta que el
+emisor (cliente) se conecta y envía la trama ya afectada por el ruido.
+
 ## Cómo compilar y ejecutar
 
 ```bash
-# Receptor (compilar una sola vez)
+# 1. Compilar el receptor (una sola vez)
 g++ -std=c++17 -O2 -o receptor receptor.cpp
 
-# Ejecutar Emisor
-python3 emisor.py
-
-# Ejecutar Receptor
+# 2. Correr el receptor PRIMERO (se queda escuchando)
 ./receptor
+# Puerto para escuchar [5000]: <enter para usar 5000>
+
+# 3. En otra terminal, correr el emisor
+python3 emisor.py
 ```
 
-## Flujo de uso
+## Flujo de uso del emisor
 
-1. Corre `emisor.py`, elige algoritmo (1=Hamming, 2=CRC-32), ingresa el mensaje binario.
-2. Copia la "Trama" que imprime el emisor.
-3. Corre `./receptor`, elige el mismo algoritmo, pega la trama (intacta o con bits modificados).
-4. El receptor indica: sin errores / error detectado / error corregido.
+El emisor pide, en orden:
+1. Mensaje en texto libre (no binario — la capa de presentación lo
+   convierte a ASCII binario automáticamente).
+2. Algoritmo: `1` = Hamming (corrección), `2` = CRC-32 (detección).
+3. Tasa de error del canal, como fracción (`1/100`) o decimal (`0.01`).
+   Usa `0` para simular un canal sin ruido.
+4. Host y puerto del receptor (por defecto `127.0.0.1:5000`, útil si
+   ambos programas corren en la misma máquina).
 
-## Formato de trama (acordado entre Emisor–Receptor)
+El emisor imprime en pantalla: el texto original, los bits ASCII, la trama
+antes y después del ruido (y cuántos bits se voltearon), y finalmente la
+envía por el socket.
 
-- Hamming: la trama = codeword completo. El receptor deduce `r` (bits de paridad)
-  automáticamente a partir de la longitud total `n` (mínimo `r` tal que `2^r >= n+1`),
-  así que no requiere metadata adicional.
-- CRC-32: la trama = `[bits de datos] + [32 bits de CRC]`. El receptor siempre
-  interpreta los últimos 32 bits como el CRC.
+## Formato en el cable (protocolo interno)
 
-## Plan de pruebas sugerido para el reporte (3 mensajes × 2 algoritmos × 3 escenarios)
+Se envía una sola línea de texto: `"<algoritmo>|<trama_bits>\n"`.
+El dígito de algoritmo (`1` o `2`) se trata como metadata de protocolo y
+no pasa por `aplicar_ruido`; solo la trama de datos (incluyendo sus
+bits de paridad/CRC) está expuesta al ruido simulado.
 
-Usa mensajes de longitud distinta, por ejemplo:
-- Corto: `1101` (4 bits)
-- Medio: `110101011` (9 bits)
-- Largo: `1101011010110110101101011` (25 bits)
+- Hamming: la trama = codeword completo. El receptor deduce `r` (bits
+  de paridad) automáticamente a partir de la longitud total.
+- CRC-32: la trama = `[bits ASCII del mensaje] + [32 bits de CRC]`.
 
-Para cada mensaje y cada algoritmo:
-1. Cero errores: pega la trama tal cual → debe validar OK.
-2. Un error: invierte manualmente 1 bit de la trama → Hamming debe corregir;
-   CRC-32 debe detectar y descartar.
-3. Dos o más errores: invierte 2+ bits → observa el resultado. Este es el
-   escenario clave para la pregunta de "¿se puede engañar al algoritmo?":
-   - Con Hamming SEC, 2 errores casi siempre lo "engañan": el algoritmo
-     detecta un síndrome válido y "corrige" en la posición equivocada,
-     produciendo datos incorrectos sin avisar que algo salió mal. Esto es una
-     debilidad estructural conocida de Hamming SEC (solo garantiza corrección
-     de 1 error; con 2 errores el síndrome apunta a una posición distinta).
-   - Con CRC-32, casi cualquier combinación de bits volteados cambia el
-     residuo y se detecta. Solo se "engaña" si el patrón de error exacto es
-     múltiplo del polinomio generador (matemáticamente posible, pero muy
-     improbable con errores aleatorios) — es una forma directa de responder
-     la pregunta de debilidad estructural: la detección de CRC no es 100%
-     infalible en teoría, solo con probabilidad extremadamente alta.
+## Plan de pruebas sugerido para el reporte
 
-Toma captura de pantalla de cada corrida (emisor + receptor) para el reporte.
+Repite con 3 mensajes de distinta longitud (ej. `"Hi"`, `"Hola Mundo"`,
+un párrafo más largo) y ambos algoritmos, variando la tasa de error:
+
+1. Cero errores: tasa `0` → debe entregar el texto exacto.
+2. Un error probable: tasa baja (ej. `1/200`) hasta que ocurra
+   exactamente 1 bit volteado → Hamming corrige y muestra el texto
+   correcto con aviso de "error corregido en posición X"; CRC-32
+   detecta y descarta.
+3. Dos o más errores: tasa más alta (ej. `1/20` o mayor) → observa
+   si el algoritmo lo maneja o falla silenciosamente. Con Hamming
+   SEC, 2+ errores casi siempre lo "engañan": corrige una posición
+   equivocada y entrega texto corrupto sin avisar — debilidad
+   estructural conocida (solo garantiza corrección de 1 error). Con
+   CRC-32, casi cualquier combinación de bits volteados cambia el
+   residuo y se detecta; solo se "engaña" si el patrón de error exacto
+   es múltiplo del polinomio generador (posible en teoría, muy
+   improbable con errores aleatorios).
+
+Toma captura de pantalla de ambas terminales (emisor y receptor) para
+cada corrida.
 
 ## Nota sobre el generador CRC-32 usado
 
-Se implementa por división polinomial directa(ag regar 32 ceros al mensaje,
-dividir mod-2 por el generador de 33 bits, el residuo es el CRC), usando el
-mismo polinomio estándar IEEE 802.3 (`0x04C11DB7`). Esto difiere ligeramente
-del CRC-32 "de Ethernet/zlib" que además reflexiona los bits de entrada/salida
-y aplica XOR inicial/final de `0xFFFFFFFF` — vale la pena mencionar esto como
-nota de diseño en la sección de descripción del reporte.
+Se implementa por división polinomial directa (agregar 32 ceros al
+mensaje, dividir mod-2 por el generador de 33 bits, el residuo es el CRC),
+usando el polinomio estándar IEEE 802.3 (`0x04C11DB7`). Esto difiere
+ligeramente del CRC-32 "de Ethernet/zlib", que además reflexiona los bits
+de entrada/salida y aplica XOR inicial/final de `0xFFFFFFFF` — vale la
+pena mencionar esto como nota de diseño en la sección de descripción del
+reporte.
